@@ -15,3 +15,10 @@ wheels/
 
 # Output
 *.csv
+*.html
+
+#Swagger
+swagger.json
+
+# Local performance testing — never commit
+bench/

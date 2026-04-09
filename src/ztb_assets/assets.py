@@ -52,7 +52,7 @@ def fetch_all_assets(client: ZTBClient, *, page_size: int = 100) -> list[dict[st
     return all_rows
 
 
-def _flatten(row: dict[str, Any]) -> dict[str, Any]:
+def flatten_row(row: dict[str, Any]) -> dict[str, Any]:
     """Flatten one level of nested dicts so the output stays tabular.
 
     Example: {"a": {"b": 1}, "c": 2}  →  {"a.b": 1, "c": 2}
@@ -85,7 +85,7 @@ def write_csv(devices: Iterable[dict[str, Any]], out_path: Path) -> int:
     makes the output resilient to schema drift — if ZTB adds/removes optional
     fields, the CSV just gains or loses columns without blowing up.
     """
-    flat_rows = [_flatten(d) for d in devices]
+    flat_rows = [flatten_row(d) for d in devices]
     if not flat_rows:
         # No devices → write an empty file rather than leaving a stale one.
         out_path.write_text("")

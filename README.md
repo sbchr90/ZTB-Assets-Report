@@ -14,6 +14,7 @@ A lightweight Python CLI that connects to the Zero Trust Branch API, fetches eve
 - [Configuration](#-configuration)
 - [Usage](#-usage)
 - [Output format](#-output-format)
+- [Scalability](#-scalability)
 - [Security](#-security)
 - [Troubleshooting](#-troubleshooting)
 - [License](#-license)
@@ -99,7 +100,7 @@ Writes `assets.csv` in the current directory.
 ### All options
 
 ```
-usage: ztb-assets [-h] [-o OUTPUT] [--page-size PAGE_SIZE]
+usage: ztb-assets [-h] [-o OUTPUT] [--page-size PAGE_SIZE] [--html [PATH]]
 
 Fetch discovered devices from Zscaler ZTB and write them to a CSV file.
 
@@ -107,7 +108,41 @@ options:
   -h, --help            show this help message and exit
   -o, --output OUTPUT   Output CSV path (default: assets.csv)
   --page-size PAGE_SIZE Page size for the devices API (default: 100)
+  --html [PATH]         Also write an interactive HTML report
+                        (default path: assets.html)
 ```
+
+### 🌐 Interactive HTML report
+
+Pass `--html` to generate a self-contained, browser-friendly report alongside the CSV:
+
+```bash
+uv run ztb-assets --html                       # writes assets.csv AND assets.html
+uv run ztb-assets --html report.html           # custom HTML path
+uv run ztb-assets --html report.html -o report.csv
+```
+
+The report has two tabs:
+
+**📊 Assets Report** (default) — visual summary of your fleet:
+
+- 🥧 **OS pie chart** — one slice per operating system, built from `operating_system:*` tags. Linux distributions (debian, ubuntu, fedora, …) are folded into a single `Linux` bucket so the chart isn't fragmented.
+- 📊 **Top 10 manufacturers** — horizontal bar chart of the most common `manufacturer:*` tags.
+- 👆 **Click-through filtering** — click any pie slice or bar to jump to the **Assets List** tab pre-filtered to just those devices. A banner shows the active OS filter and lets you clear it.
+
+**📋 Assets List** — the full interactive device table:
+
+- 🔍 **Per-column filtering** — type into any column header to live-filter rows (case-insensitive substring match)
+- 🏷️ **Smart tag filter** — the `tags` column gets a dropdown listing every unique tag in your dataset. Click tags to filter; multiple selected tags use **AND** semantics ("computers + linux" shows only Linux computers)
+- 👆 **Click-to-filter chips** — click any tag chip directly inside a table row to add it to the filter (click again to remove)
+- 🔃 **Sortable columns** — click any column header to sort ascending / descending
+- 👁️ **Column visibility** — open the **Columns** menu to hide noisy columns. Your selection is remembered across reloads via `localStorage`.
+- ♻️ **Reset filters** — one click clears every active filter (per-column, tag, and OS).
+
+**Both tabs share:**
+
+- 📦 **Single-file & offline** — the entire dataset is embedded inside the HTML, so the file works by simple double-click without any web server. Perfect for emailing or archiving.
+- 🚫 **No external assets** — no CDNs, fonts, or trackers. Everything is bundled in one HTML file.
 
 ### 💡 Examples
 
@@ -151,6 +186,25 @@ Typical columns include:
 `id`, `hostname`, `ip_address`, `mac`, `vendor`, `type`, `location`, `network_name`, `network_display_name`, `status`, `protection`, `is_quarantined`, `tags`, `createdAt`, `updatedAt`, …
 
 Nested objects are flattened one level deep using dot notation (e.g. `finger_banks.device_name`). Deeper structures are serialized into a single cell so the CSV stays strictly tabular and opens cleanly in Excel, Numbers, Google Sheets, or `pandas`.
+
+When `--html` is used, the HTML report mirrors the CSV exactly: same columns, same flattening, same values — just rendered as an interactive table.
+
+---
+
+## 📏 Scalability
+
+The **CSV export** scales comfortably into the hundreds of thousands of devices — generation is linear, finishes in seconds, and the resulting file opens cleanly in Excel, Numbers, Google Sheets, or `pandas`. If your tenant is very large, stick with CSV.
+
+The **interactive HTML report** embeds the full dataset inline and renders every row into the DOM, so it's best suited for small-to-mid-size fleets. Rough guidance:
+
+| Devices     | HTML experience                                                        |
+|------------:|------------------------------------------------------------------------|
+|   ≤ 5,000   | 🟢 Fully responsive — filter, sort, and tab switching feel instant.   |
+|   ~10,000   | 🟡 Still usable. Filter typing and sorting show mild lag.             |
+|   ~25,000   | 🟠 Soft limit. Filter/sort becomes noticeably sluggish; file ~20 MB.  |
+|   ≥ 50,000  | 🔴 Not recommended. File exceeds ~40 MB and the table feels stuck.    |
+
+> 💡 If you only need the HTML report for a specific subset of a very large tenant, generate the CSV first, narrow it down in your tool of choice, and run the HTML report against a smaller export — or simply live with CSV-only for the whole fleet.
 
 ---
 
