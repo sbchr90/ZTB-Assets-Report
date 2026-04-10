@@ -360,6 +360,33 @@ _TEMPLATE = """<!doctype html>
   body[data-active-tab="report"] .cols-wrap,
   body[data-active-tab="report"] #reset-btn {{ display: none; }}
 
+  /* ---- Stat cards (Assets Report header row) ------------------------ */
+  .stat-row {{
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }}
+  .stat-card {{
+    flex: 0 0 auto;
+    min-width: 200px;
+    padding: 16px 24px;
+  }}
+  .stat-card .label {{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+  }}
+  .stat-card .value {{
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--text);
+    margin-top: 4px;
+    line-height: 1.1;
+  }}
+  .stat-card .value.warn {{ color: #ef4444; }}
+
   /* ---- Report tab (cards + charts) ----------------------------------- */
   .report-grid {{
     display: grid;
@@ -421,10 +448,23 @@ _TEMPLATE = """<!doctype html>
   }}
   .legend .label {{ flex: 1; }}
   .legend .count {{ color: var(--muted); }}
+  /* Split-legend variant: two legend columns flanking the pie. */
+  .pie-wrap.split {{ justify-content: center; }}
+  .pie-wrap .legend-left {{ text-align: right; }}
+  .pie-wrap .legend-left li {{ flex-direction: row-reverse; }}
+  .pie-wrap .legend-left li,
+  .pie-wrap .legend-right li {{ min-width: 0; }}
+  .pie-wrap .legend .label.truncate {{
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+    display: inline-block;
+  }}
 
   .bar-chart svg {{
     width: 100%;
-    max-width: 360px;
+    max-width: 440px;
     height: auto;
     display: block;
   }}
@@ -439,8 +479,12 @@ _TEMPLATE = """<!doctype html>
   /* ---- Synthetic OS filter banner ------------------------------------ */
   /* Note: use :not([hidden]) so the explicit display value doesn't
      override the user-agent [hidden] display:none rule. */
-  #os-filter-banner:not([hidden]) {{
-    margin-bottom: 12px;
+  #os-filter-banner:not([hidden]),
+  #location-filter-banner:not([hidden]),
+  #manufacturer-filter-banner:not([hidden]),
+  #protection-filter-banner:not([hidden]) {{
+    margin-bottom: 8px;
+    margin-right: 8px;
     padding: 8px 14px;
     background: var(--accent-soft);
     border: 1px solid var(--accent);
@@ -451,7 +495,10 @@ _TEMPLATE = """<!doctype html>
     align-items: center;
     gap: 10px;
   }}
-  #os-filter-banner button {{
+  #os-filter-banner button,
+  #location-filter-banner button,
+  #manufacturer-filter-banner button,
+  #protection-filter-banner button {{
     background: none;
     border: none;
     color: inherit;
@@ -460,7 +507,10 @@ _TEMPLATE = """<!doctype html>
     line-height: 1;
     padding: 0 4px;
   }}
-  #os-filter-banner button:hover {{ color: #1d4ed8; }}
+  #os-filter-banner button:hover,
+  #location-filter-banner button:hover,
+  #manufacturer-filter-banner button:hover,
+  #protection-filter-banner button:hover {{ color: #1d4ed8; }}
 </style>
 </head>
 <body data-active-tab="report">
@@ -485,6 +535,16 @@ _TEMPLATE = """<!doctype html>
 
 <main>
   <section class="tab-panel active" id="panel-report">
+    <div class="stat-row">
+      <section class="card stat-card" id="stat-total">
+        <div class="label">Total devices</div>
+        <div class="value">&mdash;</div>
+      </section>
+      <section class="card stat-card" id="stat-quarantined">
+        <div class="label">Quarantined</div>
+        <div class="value">&mdash;</div>
+      </section>
+    </div>
     <div class="report-grid">
       <section class="card">
         <h2>Operating systems</h2>
@@ -494,11 +554,22 @@ _TEMPLATE = """<!doctype html>
         <h2>Top 10 manufacturers</h2>
         <div id="chart-mfr"></div>
       </section>
+      <section class="card">
+        <h2>Devices by Site</h2>
+        <div id="chart-sites"></div>
+      </section>
+      <section class="card">
+        <h2>Protection Status</h2>
+        <div id="chart-protection"></div>
+      </section>
     </div>
   </section>
 
   <section class="tab-panel" id="panel-list">
     <div id="os-filter-banner" hidden></div>
+    <div id="location-filter-banner" hidden></div>
+    <div id="manufacturer-filter-banner" hidden></div>
+    <div id="protection-filter-banner" hidden></div>
     <div class="table-wrap">
       <table id="assets-table">
         <thead>
@@ -548,6 +619,13 @@ _TEMPLATE = """<!doctype html>
   // Bypasses the regular tag dropdown so that clicking the "Linux" slice
   // catches all distros (debian, ubuntu, ...) folded into that bucket.
   let activeOSFilter = null;
+  // Synthetic location filter set by clicking a Sites pie slice. Exact
+  // match against row.location, so "HQ" never collides with "HQ-Branch".
+  let activeLocationFilter = null;
+  // Synthetic manufacturer filter set by clicking a manufacturer bar.
+  let activeManufacturerFilter = null;
+  // Synthetic protection filter set by clicking a Protection Status slice.
+  let activeProtectionFilter = null;
 
   // Column-visibility state. Persisted in localStorage so the viewer's
   // preference survives a page refresh. Stale entries (columns that no
@@ -740,9 +818,31 @@ _TEMPLATE = """<!doctype html>
   }}
 
   function rowMatchesFilters(row) {{
-    // Synthetic OS filter (driven by the pie chart click).
+    // Synthetic OS filter (driven by the OS pie chart click).
     if (activeOSFilter !== null && normalizedOS(row) !== activeOSFilter) {{
       return false;
+    }}
+    // Synthetic location filter (driven by the Sites pie chart click).
+    // Exact match; empty/missing location maps to "Unknown".
+    if (activeLocationFilter !== null) {{
+      const loc = (row.location === null || row.location === undefined || row.location === "")
+        ? "Unknown"
+        : String(row.location);
+      if (loc !== activeLocationFilter) return false;
+    }}
+    // Synthetic manufacturer filter (driven by the bar chart click).
+    if (activeManufacturerFilter !== null) {{
+      const mfr = splitTags(row[TAGS_COLUMN])
+        .find(t => t.startsWith("manufacturer:"));
+      const mfrName = mfr ? mfr.slice("manufacturer:".length).trim() : "";
+      if (mfrName !== activeManufacturerFilter) return false;
+    }}
+    // Synthetic protection filter (driven by Protection Status chart).
+    if (activeProtectionFilter !== null) {{
+      const prot = (row.protection === null || row.protection === undefined || String(row.protection).trim() === "")
+        ? "unknown"
+        : String(row.protection).trim().toLowerCase();
+      if (prot !== activeProtectionFilter) return false;
     }}
     // Per-column substring filters
     for (const col of columns) {{
@@ -951,6 +1051,41 @@ _TEMPLATE = """<!doctype html>
     banner.appendChild(btn);
   }}
 
+  // ---- Synthetic location filter (driven by the Sites chart) ------------
+
+  function setLocationFilter(site) {{
+    // Toggle: clicking the same site clears it.
+    activeLocationFilter = (activeLocationFilter === site) ? null : site;
+    updateLocationBanner();
+    applyFilters();
+  }}
+
+  function clearLocationFilter() {{
+    activeLocationFilter = null;
+    updateLocationBanner();
+    applyFilters();
+  }}
+
+  function updateLocationBanner() {{
+    const banner = document.getElementById("location-filter-banner");
+    if (activeLocationFilter === null) {{
+      banner.hidden = true;
+      banner.textContent = "";
+      return;
+    }}
+    banner.hidden = false;
+    banner.innerHTML = "";
+    const text = document.createElement("span");
+    text.textContent = "Filtered by Site: " + activeLocationFilter;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Clear site filter");
+    btn.textContent = "\u2715";
+    btn.addEventListener("click", clearLocationFilter);
+    banner.appendChild(text);
+    banner.appendChild(btn);
+  }}
+
   // ---- Charts ------------------------------------------------------------
 
   function emptyChart(container, msg) {{
@@ -1111,13 +1246,33 @@ _TEMPLATE = """<!doctype html>
     const wrap = document.createElement("div");
     wrap.className = "bar-chart";
 
-    const ROW_H = 26;
-    const LABEL_W = 140;
+    // Widened label column so long brand names ("proxmox server
+    // solutions", "raspberry pi foundation") get full room. Names above
+    // MAX_CHARS are wrapped onto a second line at a space boundary so
+    // the chart is pushed further right without clipping the label.
+    const ROW_H = 40;
+    const LABEL_W = 200;
     const COUNT_W = 36;
     const PAD_R = 10;
-    const totalW = 360;
+    const totalW = 440;
     const barAreaW = totalW - LABEL_W - COUNT_W - PAD_R;
     const totalH = entries.length * ROW_H + 8;
+    const BAR_H = 16;
+    const MAX_CHARS = 18;
+
+    function wrapLabel(name) {{
+      // 1 line if short enough, else split at the last space before
+      // MAX_CHARS (hard-split if no space), truncate line 2 if still long.
+      if (name.length <= MAX_CHARS) return [name];
+      let splitAt = name.lastIndexOf(" ", MAX_CHARS);
+      if (splitAt <= 0) splitAt = MAX_CHARS;
+      const line1 = name.slice(0, splitAt).trim();
+      let line2 = name.slice(splitAt).trim();
+      if (line2.length > MAX_CHARS) {{
+        line2 = line2.slice(0, MAX_CHARS - 1) + "\u2026";
+      }}
+      return [line1, line2];
+    }}
 
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 " + totalW + " " + totalH);
@@ -1125,19 +1280,34 @@ _TEMPLATE = """<!doctype html>
 
     entries.forEach((entry, i) => {{
       const [name, count] = entry;
-      const y = i * ROW_H + 4;
+      const rowTop = i * ROW_H + 4;
+      const rowMid = rowTop + ROW_H / 2;
       const barW = Math.max(2, (count / max) * barAreaW);
 
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
       g.setAttribute("class", "bar");
 
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("x", LABEL_W - 8);
-      label.setAttribute("y", y + ROW_H / 2 + 4);
+      label.setAttribute("x", LABEL_W - 10);
       label.setAttribute("text-anchor", "end");
-      // Truncate very long names so they don't overflow the label column.
-      const display = name.length > 18 ? name.slice(0, 17) + "\u2026" : name;
-      label.textContent = display;
+      const lines = wrapLabel(name);
+      if (lines.length === 1) {{
+        label.setAttribute("y", rowMid + 4);
+        label.textContent = lines[0];
+      }} else {{
+        // Two-line layout: first baseline above the row center, second
+        // 14px below. Each tspan gets its own x so right-alignment works.
+        label.setAttribute("y", rowMid - 4);
+        const t1 = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        t1.setAttribute("x", LABEL_W - 10);
+        t1.textContent = lines[0];
+        label.appendChild(t1);
+        const t2 = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        t2.setAttribute("x", LABEL_W - 10);
+        t2.setAttribute("dy", "14");
+        t2.textContent = lines[1];
+        label.appendChild(t2);
+      }}
       const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
       titleEl.textContent = name + ": " + count;
       label.appendChild(titleEl);
@@ -1145,9 +1315,9 @@ _TEMPLATE = """<!doctype html>
 
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       rect.setAttribute("x", LABEL_W);
-      rect.setAttribute("y", y + 4);
+      rect.setAttribute("y", rowMid - BAR_H / 2);
       rect.setAttribute("width", barW);
-      rect.setAttribute("height", ROW_H - 10);
+      rect.setAttribute("height", BAR_H);
       rect.setAttribute("rx", 3);
       rect.setAttribute("fill", "#2563eb");
       const rectTitle = document.createElementNS("http://www.w3.org/2000/svg", "title");
@@ -1158,15 +1328,12 @@ _TEMPLATE = """<!doctype html>
       const cnt = document.createElementNS("http://www.w3.org/2000/svg", "text");
       cnt.setAttribute("class", "count");
       cnt.setAttribute("x", LABEL_W + barW + 6);
-      cnt.setAttribute("y", y + ROW_H / 2 + 4);
+      cnt.setAttribute("y", rowMid + 4);
       cnt.textContent = count;
       g.appendChild(cnt);
 
       g.addEventListener("click", () => {{
-        const tag = "manufacturer:" + name;
-        // Reuse the existing tag-filter mechanism — toggleTag() handles
-        // both adding and re-clicking-to-remove and updates chip states.
-        if (!activeTags.has(tag)) toggleTag(tag);
+        setManufacturerFilter(name);
         switchTab("list");
       }});
 
@@ -1177,13 +1344,384 @@ _TEMPLATE = """<!doctype html>
     container.appendChild(wrap);
   }}
 
+  function buildTotalStat() {{
+    const el = document.querySelector("#stat-total .value");
+    if (el) el.textContent = data.length.toLocaleString();
+  }}
+
+  function buildQuarantinedStat() {{
+    const el = document.querySelector("#stat-quarantined .value");
+    if (!el) return;
+    const count = data.filter(r => {{
+      const v = r.is_quarantined;
+      return v === true || v === "true" || v === 1 || v === "1";
+    }}).length;
+    el.textContent = count.toLocaleString();
+    if (count > 0) el.classList.add("warn");
+  }}
+
+  // ---- Synthetic manufacturer filter (driven by the bar chart) ----------
+
+  function setManufacturerFilter(name) {{
+    activeManufacturerFilter = (activeManufacturerFilter === name) ? null : name;
+    updateManufacturerBanner();
+    applyFilters();
+  }}
+
+  function clearManufacturerFilter() {{
+    activeManufacturerFilter = null;
+    updateManufacturerBanner();
+    applyFilters();
+  }}
+
+  function updateManufacturerBanner() {{
+    const banner = document.getElementById("manufacturer-filter-banner");
+    if (activeManufacturerFilter === null) {{
+      banner.hidden = true;
+      banner.textContent = "";
+      return;
+    }}
+    banner.hidden = false;
+    banner.innerHTML = "";
+    const text = document.createElement("span");
+    text.textContent = "Filtered by Manufacturer: " + activeManufacturerFilter;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Clear manufacturer filter");
+    btn.textContent = "\u2715";
+    btn.addEventListener("click", clearManufacturerFilter);
+    banner.appendChild(text);
+    banner.appendChild(btn);
+  }}
+
+  // ---- Synthetic protection filter (driven by Protection Status chart) --
+
+  function setProtectionFilter(value) {{
+    activeProtectionFilter = (activeProtectionFilter === value) ? null : value;
+    updateProtectionBanner();
+    applyFilters();
+  }}
+
+  function clearProtectionFilter() {{
+    activeProtectionFilter = null;
+    updateProtectionBanner();
+    applyFilters();
+  }}
+
+  function updateProtectionBanner() {{
+    const banner = document.getElementById("protection-filter-banner");
+    if (activeProtectionFilter === null) {{
+      banner.hidden = true;
+      banner.textContent = "";
+      return;
+    }}
+    banner.hidden = false;
+    banner.innerHTML = "";
+    const text = document.createElement("span");
+    text.textContent = "Filtered by Protection: " + activeProtectionFilter;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Clear protection filter");
+    btn.textContent = "\u2715";
+    btn.addEventListener("click", clearProtectionFilter);
+    banner.appendChild(text);
+    banner.appendChild(btn);
+  }}
+
+  // Semantic color maps for security-posture charts.
+  const PROTECTION_COLORS = {{
+    on: "#10b981",
+    off: "#ef4444",
+    monitor: "#f59e0b",
+    unknown: "#6b7280",
+  }};
+  // Generic pie builder for simple column-count charts (Protection
+  // Status). Renders into `container` with an optional semantic
+  // color map. Slices are clickable via the synthetic protection filter.
+  function buildColumnPie(container, colName, colorMap) {{
+    if (!data.length) {{ emptyChart(container, "No devices to chart."); return; }}
+    const hasCol = data.some(r => Object.prototype.hasOwnProperty.call(r, colName));
+    if (!hasCol) {{ emptyChart(container, "No " + colName + " data available."); return; }}
+
+    const counts = new Map();
+    data.forEach(row => {{
+      const raw = row[colName];
+      const val = (raw === null || raw === undefined || String(raw).trim() === "")
+        ? "unknown"
+        : String(raw).trim().toLowerCase();
+      counts.set(val, (counts.get(val) || 0) + 1);
+    }});
+
+    let entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const MAX_NAMED = 7;
+    if (entries.length > MAX_NAMED) {{
+      const head = entries.slice(0, MAX_NAMED);
+      const tail = entries.slice(MAX_NAMED);
+      head.push(["__other__", tail.reduce((s, e) => s + e[1], 0)]);
+      entries = head;
+    }}
+
+    const total = entries.reduce((s, e) => s + e[1], 0);
+    const SIZE = 200;
+    const R = 90;
+    const CX = SIZE / 2;
+    const CY = SIZE / 2;
+
+    container.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "pie-wrap";
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 " + SIZE + " " + SIZE);
+    svg.setAttribute("width", SIZE);
+    svg.setAttribute("height", SIZE);
+
+    let cumulative = 0;
+    const sliceMeta = [];
+    entries.forEach((entry, i) => {{
+      const [bucket, count] = entry;
+      const frac = count / total;
+      const startAngle = cumulative * 2 * Math.PI - Math.PI / 2;
+      cumulative += frac;
+      const endAngle = cumulative * 2 * Math.PI - Math.PI / 2;
+
+      const x1 = CX + R * Math.cos(startAngle);
+      const y1 = CY + R * Math.sin(startAngle);
+      const x2 = CX + R * Math.cos(endAngle);
+      const y2 = CY + R * Math.sin(endAngle);
+      const largeArc = frac > 0.5 ? 1 : 0;
+
+      let d;
+      if (entries.length === 1) {{
+        d = "M " + (CX - R) + " " + CY +
+            " a " + R + " " + R + " 0 1 0 " + (R * 2) + " 0" +
+            " a " + R + " " + R + " 0 1 0 " + (-R * 2) + " 0 Z";
+      }} else {{
+        d = "M " + CX + " " + CY +
+            " L " + x1 + " " + y1 +
+            " A " + R + " " + R + " 0 " + largeArc + " 1 " + x2 + " " + y2 +
+            " Z";
+      }}
+
+      const color = (bucket !== "__other__" && colorMap[bucket])
+        ? colorMap[bucket]
+        : PIE_PALETTE[i % PIE_PALETTE.length];
+      const label = bucket === "__other__" ? "Other" : bucket;
+      const pct = ((count / total) * 100).toFixed(1);
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", color);
+      const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      titleEl.textContent = label + ": " + count + " (" + pct + "%)";
+      path.appendChild(titleEl);
+      if (bucket !== "__other__") {{
+        path.addEventListener("click", () => {{ setProtectionFilter(label); switchTab("list"); }});
+      }} else {{
+        path.style.cursor = "default";
+      }}
+      svg.appendChild(path);
+      sliceMeta.push({{ bucket, label, color, count, pct }});
+    }});
+
+    wrap.appendChild(svg);
+
+    const legend = document.createElement("ul");
+    legend.className = "legend";
+    sliceMeta.forEach(s => {{
+      const li = document.createElement("li");
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = s.color;
+      const lbl = document.createElement("span");
+      lbl.className = "label";
+      lbl.textContent = s.label;
+      const cnt = document.createElement("span");
+      cnt.className = "count";
+      cnt.textContent = s.count + " (" + s.pct + "%)";
+      li.appendChild(sw);
+      li.appendChild(lbl);
+      li.appendChild(cnt);
+      if (s.bucket !== "__other__") {{
+        li.addEventListener("click", () => {{ setProtectionFilter(s.label); switchTab("list"); }});
+      }} else {{
+        li.style.cursor = "default";
+      }}
+      legend.appendChild(li);
+    }});
+    wrap.appendChild(legend);
+    container.appendChild(wrap);
+  }}
+
+  function buildProtectionChart() {{
+    buildColumnPie(
+      document.getElementById("chart-protection"),
+      "protection",
+      PROTECTION_COLORS
+    );
+  }}
+
+  // Deterministic color for slice i out of `total` total slices. HSL
+  // spread is used instead of a fixed palette because the Sites chart
+  // can render up to 21 slices (top 20 + Other).
+  function hslColor(i, total) {{
+    const hue = Math.floor((i * 360) / Math.max(total, 1));
+    return "hsl(" + hue + ", 65%, 55%)";
+  }}
+
+  function buildSitesChart() {{
+    const container = document.getElementById("chart-sites");
+    if (!data.length) {{ emptyChart(container, "No devices to chart."); return; }}
+
+    // Defensive: if no row has a location field at all, skip the chart.
+    const hasLocationKey = data.some(r => Object.prototype.hasOwnProperty.call(r, "location"));
+    if (!hasLocationKey) {{
+      emptyChart(container, "No location data available.");
+      return;
+    }}
+
+    // Count locations. Empty / null / missing → "Unknown".
+    const counts = new Map();
+    data.forEach(row => {{
+      const raw = row.location;
+      const name = (raw === null || raw === undefined || String(raw).trim() === "")
+        ? "Unknown"
+        : String(raw).trim();
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }});
+
+    // Sort descending, keep top 20, collapse the rest into "Other".
+    let entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const MAX_NAMED = 20;
+    if (entries.length > MAX_NAMED) {{
+      const head = entries.slice(0, MAX_NAMED);
+      const tail = entries.slice(MAX_NAMED);
+      const otherCount = tail.reduce((s, e) => s + e[1], 0);
+      head.push(["__other__", otherCount]);
+      entries = head;
+    }}
+
+    const total = entries.reduce((s, e) => s + e[1], 0);
+    const SIZE = 220;
+    const R = 100;
+    const CX = SIZE / 2;
+    const CY = SIZE / 2;
+
+    container.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "pie-wrap split";
+
+    // Left legend populated before the SVG, right legend after.
+    const leftLegend = document.createElement("ul");
+    leftLegend.className = "legend legend-left";
+    const rightLegend = document.createElement("ul");
+    rightLegend.className = "legend legend-right";
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 " + SIZE + " " + SIZE);
+    svg.setAttribute("width", SIZE);
+    svg.setAttribute("height", SIZE);
+
+    let cumulative = 0;
+    const sliceMeta = [];
+    entries.forEach((entry, i) => {{
+      const [bucket, count] = entry;
+      const frac = count / total;
+      const startAngle = cumulative * 2 * Math.PI - Math.PI / 2;
+      cumulative += frac;
+      const endAngle = cumulative * 2 * Math.PI - Math.PI / 2;
+
+      const x1 = CX + R * Math.cos(startAngle);
+      const y1 = CY + R * Math.sin(startAngle);
+      const x2 = CX + R * Math.cos(endAngle);
+      const y2 = CY + R * Math.sin(endAngle);
+      const largeArc = frac > 0.5 ? 1 : 0;
+
+      let d;
+      if (entries.length === 1) {{
+        // Single full circle — can't draw a 360° arc with one path command.
+        d = "M " + (CX - R) + " " + CY +
+            " a " + R + " " + R + " 0 1 0 " + (R * 2) + " 0" +
+            " a " + R + " " + R + " 0 1 0 " + (-R * 2) + " 0 Z";
+      }} else {{
+        d = "M " + CX + " " + CY +
+            " L " + x1 + " " + y1 +
+            " A " + R + " " + R + " 0 " + largeArc + " 1 " + x2 + " " + y2 +
+            " Z";
+      }}
+
+      const color = hslColor(i, entries.length);
+      const label = bucket === "__other__" ? "Other" : bucket;
+      const pct = ((count / total) * 100).toFixed(1);
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", color);
+      const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      titleEl.textContent = label + ": " + count + " (" + pct + "%)";
+      path.appendChild(titleEl);
+      if (bucket !== "__other__") {{
+        path.addEventListener("click", () => {{
+          setLocationFilter(label);
+          switchTab("list");
+        }});
+      }} else {{
+        path.style.cursor = "default";
+      }}
+      svg.appendChild(path);
+
+      sliceMeta.push({{ bucket, label, color, count, pct }});
+    }});
+
+    // Split: first half of the sorted slices on the left, rest on the
+    // right. "Other", if present, is the last entry of `entries` and
+    // therefore lands on the right side naturally.
+    const mid = Math.ceil(sliceMeta.length / 2);
+    sliceMeta.forEach((s, i) => {{
+      const li = document.createElement("li");
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = s.color;
+      const lbl = document.createElement("span");
+      lbl.className = "label truncate";
+      lbl.textContent = s.label;
+      lbl.title = s.label;
+      const cnt = document.createElement("span");
+      cnt.className = "count";
+      cnt.textContent = s.count;
+      li.appendChild(sw);
+      li.appendChild(lbl);
+      li.appendChild(cnt);
+      if (s.bucket !== "__other__") {{
+        li.addEventListener("click", () => {{
+          setLocationFilter(s.label);
+          switchTab("list");
+        }});
+      }} else {{
+        li.style.cursor = "default";
+      }}
+      (i < mid ? leftLegend : rightLegend).appendChild(li);
+    }});
+
+    wrap.appendChild(leftLegend);
+    wrap.appendChild(svg);
+    wrap.appendChild(rightLegend);
+    container.appendChild(wrap);
+  }}
+
   // ---- Boot --------------------------------------------------------------
 
   resetBtn.addEventListener("click", () => {{
     Object.values(filterInputs).forEach(i => {{ i.value = ""; }});
     activeTags.clear();
     activeOSFilter = null;
+    activeLocationFilter = null;
+    activeManufacturerFilter = null;
+    activeProtectionFilter = null;
     updateOSBanner();
+    updateLocationBanner();
+    updateManufacturerBanner();
+    updateProtectionBanner();
     syncTagChipStates();
     applyFilters();
   }});
@@ -1192,8 +1730,12 @@ _TEMPLATE = """<!doctype html>
   renderRows();
   buildColumnsPanel();
   applyColumnVisibility();
+  buildTotalStat();
+  buildQuarantinedStat();
   buildOSChart();
   buildManufacturerChart();
+  buildSitesChart();
+  buildProtectionChart();
   wireTabs();
 }})();
 </script>
